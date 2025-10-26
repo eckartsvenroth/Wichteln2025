@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Wichtel-Domino — anonym</title>
+  <style>
+    :root{
+      --bg:#0b1220; --tile:#ffffff; --accent:#0ea5a4; --muted:#94a3b8;
+      --domino-dark:#0f1724; --domino-light:#e6eef6;
+    }
+    html,body{height:100%;margin:0;font-family:Inter,system-ui,Segoe UI,Roboto,Helvetica,Arial}
+    body{background:linear-gradient(180deg,#061126,#0b1b2b);color:var(--tile);display:flex;align-items:center;justify-content:center;padding:20px}
+    .app{max-width:1100px;width:100%}
+    header{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:14px}
+    h1{margin:0;font-size:1.2rem;color:#e6f2fb}
+    .hint{color:var(--muted);font-size:.9rem}
+    .board{display:grid;grid-template-columns:repeat(4,1fr);gap:18px}
+    /* Domino tile */
+    .tile{
+      background:linear-gradient(180deg,var(--domino-light),#fff);
+      border-radius:12px;
+      height:140px;
+      position:relative;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      cursor:pointer;
+      box-shadow:0 12px 30px rgba(2,6,23,.55);
+      transform-origin:center;
+      transition:transform .18s,opacity .18s,filter .18s;
+      border:6px solid var(--domino-dark);
+      user-select:none;
+      overflow:hidden;
+    }
+    /* split like domino: left dark, right light */
+    .tile .split{
+      position:absolute;inset:0;display:flex;
+    }
+    .split .left{flex:1;background:linear-gradient(180deg,#0f1724,#0a1020);display:flex;align-items:center;justify-content:center;color:#fff}
+    .split .right{flex:1;background:linear-gradient(180deg,#f8fafc,#edf6fb);display:flex;align-items:center;justify-content:center;color:#0b2440}
+    .tile .dots{position:absolute;left:20px;top:14px;display:flex;gap:6px;flex-wrap:wrap;width:44px}
+    .dot{width:10px;height:10px;border-radius:50%;background:#fff;box-shadow:0 2px 6px rgba(2,6,23,.25)}
+    .name{font-weight:800;font-size:1.05rem}
+    .tile.used{filter:grayscale(.5);opacity:.7;cursor:not-allowed;transform:translateY(4px)}
+    .controls{margin-top:12px;display:flex;gap:10px;align-items:center}
+    .btn{background:var(--accent);border:0;padding:8px 12px;border-radius:10px;cursor:pointer;font-weight:700;color:#022}
+    .small{font-size:.85rem;color:var(--muted)}
+    /* modal/pin */
+    .modal{position:fixed;inset:0;background:rgba(2,6,23,.65);display:flex;align-items:center;justify-content:center;z-index:50;visibility:hidden;opacity:0;transition:.12s}
+    .modal.show{visibility:visible;opacity:1}
+    .card{background:#fff;color:#042029;padding:18px;border-radius:12px;min-width:320px;max-width:90vw}
+    input[type="text"]{width:100%;padding:10px;border-radius:8px;border:1px solid #cbd5e1;font-size:1rem}
+    /* mobile */
+    @media (max-width:860px){ .board{grid-template-columns:repeat(2,1fr)} }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header>
+      <div>
+        <h1>Wichtel-Domino — anonym</h1>
+        <div class="hint">Klicke deinen Stein, gib deine PIN ein — das Ergebnis wird 7 Sekunden gezeigt. Danach ist dein Stein anonym und inaktiv.</div>
+      </div>
+      <div class="small">Server-gestützte, anonyme Ziehung</div>
+    </header>
+
+    <div id="board" class="board"></div>
+
+    <div class="controls">
+      <button class="btn" id="initBtn">Initialisieren (Organisator)</button>
+      <div class="small" id="initHint">Nicht initialisiert</div>
+    </div>
+  </div>
+
+  <!-- PIN Modal -->
+  <div class="modal" id="pinModal">
+    <div class="card">
+      <div style="font-weight:800;margin-bottom:6px">PIN eingeben</div>
+      <div class="small" id="pinFor"></div>
+      <input id="pinInput" type="text" placeholder="4-stellige PIN" />
+      <div style="display:flex;gap:8px;margin-top:10px;justify-content:flex-end">
+        <button class="btn" id="pinOk">OK</button>
+        <button class="btn" id="pinCancel" style="background:#e2e8f0">Abbrechen</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Reveal Modal -->
+  <div class="modal" id="revealModal">
+    <div class="card" style="text-align:center">
+      <div class="small">Dein Wichtel-Empfänger</div>
+      <div style="font-weight:900;font-size:1.6rem;margin:10px 0" id="revealName">—</div>
+      <div class="small" id="revealTimerText">Wird in 7 Sekunden automatisch geschlossen.</div>
+      <div style="margin-top:8px;display:flex;justify-content:center">
+        <button class="btn" id="revealClose">Schließen</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // --- Konfiguration ---
+    const API_BASE = ''; // <-- Trage URL deines Backends ein, z.B. https://wichtel-backend.vercel.app
+    const PARTICIPANTS = ["Anneliese","Gerhard","Anca","Carsten","Nang","Ecki","Nook","Gam"];
+    const REVEAL_SECONDS = 7;
+
+    // --- DOM references ---
+    const board = document.getElementById('board');
+    const initBtn = document.getElementById('initBtn');
+    const initHint = document.getElementById('initHint');
+    const pinModal = document.getElementById('pinModal');
+    const pinFor = document.getElementById('pinFor');
+    const pinInput = document.getElementById('pinInput');
+    const pinOk = document.getElementById('pinOk');
+    const pinCancel = document.getElementById('pinCancel');
+    const revealModal = document.getElementById('revealModal');
+    const revealName = document.getElementById('revealName');
+    const revealClose = document.getElementById('revealClose');
+    const revealTimerText = document.getElementById('revealTimerText');
+
+    // Client-state
+    let setupId = null; // vom Server nach init
+    let selectedName = null; // wer klickt
+    let usedMap = {}; // lokale Ansicht der verwendeten Namen (auch vom Server abrufbar)
+
+    // --- Utils ---
+    function el(className){ const d=document.createElement('div'); d.className=className; return d; }
+
+    // Tile markup
+    function makeTile(name, used){
+      const btn = document.createElement('button');
+      btn.className = 'tile' + (used ? ' used' : '');
+      btn.disabled = !!used;
+      // inner split
+      const split = document.createElement('div'); split.className = 'split';
+      const left = document.createElement('div'); left.className = 'left';
+      const right = document.createElement('div'); right.className = 'right';
+      // left: dots (pure decorative)
+      const dots = document.createElement('div'); dots.className = 'dots';
+      for(let i=0;i<6;i++){ const d=document.createElement('div'); d.className='dot'; dots.appendChild(d);}
+      left.appendChild(dots);
+      // right: name
+      const nameEl = document.createElement('div'); nameEl.className = 'name'; nameEl.textContent = name;
+      right.appendChild(nameEl);
+      split.appendChild(left); split.appendChild(right);
+      btn.appendChild(split);
+      return btn;
+    }
+
+    // Render board
+    function renderBoard(){
+      board.innerHTML = '';
+      PARTICIPANTS.forEach(name=>{
+        const used = !!usedMap[name];
+        const t = makeTile(name, used);
+        t.addEventListener('click', ()=>onTileClick(name));
+        board.appendChild(t);
+      });
+    }
+
+    // --- Server helpers ---
+    async function apiPost(path, body){
+      const url = (API_BASE || '') + path;
+      const res = await fetch(url, {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify(body)
+      });
+      if(!res.ok){
+        const txt = await res.text();
+        throw new Error('API-Fehler: ' + res.status + ' ' + txt);
+      }
+      return res.json();
+    }
+
+    // Initialize (organizer) -> calls backend /init which returns setupId + PIN mapping
+    initBtn.addEventListener('click', async ()=>{
+      if(!confirm('Initialisiere Ziehung und erzeuge zufällige PINs? (Du erhältst PIN-Mapping zur Weitergabe)')) return;
+      try{
+        const resp = await apiPost('/init', { participants: PARTICIPANTS });
+        setupId = resp.setupId;
+        // resp.pins is mapping name->pin; display to organizer for distribution
+        let list = 'Setup erstellt. Setup-ID: ' + setupId + '\\n\\nPINs (verteilen):\\n';
+        for(const p of Object.keys(resp.pins)){
+          list += `${p} : ${resp.pins[p]}\\n`;
+        }
+        alert(list);
+        initHint.textContent = 'Initialisiert (Setup-ID: ' + setupId + ')';
+        // fetch used map from server
+        usedMap = resp.used || {};
+        renderBoard();
+      }catch(e){
+        alert('Init fehlgeschlagen: ' + e.message);
+      }
+    });
+
+    // when user clicks tile: ask for PIN then call /reveal
+    function onTileClick(name){
+      if(!setupId){ alert('Nicht initialisiert. Organisator muss zuerst initialisieren.'); return; }
+      selectedName = name;
+      pinFor.textContent = 'Name: ' + name;
+      pinInput.value = '';
+      showModal(pinModal);
+      setTimeout(()=>pinInput.focus(),200);
+    }
+
+    pinCancel.addEventListener('click', ()=> hideModal(pinModal));
+
+    pinOk.addEventListener('click', async ()=>{
+      const pin = (pinInput.value||'').trim();
+      if(pin.length===0){ alert('Bitte PIN eingeben'); return; }
+      // call server: /reveal { setupId, name, pin }
+      try{
+        const resp = await apiPost('/reveal', { setupId, name: selectedName, pin });
+        // success: server returns { recipient, used: true }
+        hideModal(pinModal);
+        // show reveal modal for REVEAL_SECONDS and then close
+        revealName.textContent = resp.recipient;
+        showModal(revealModal);
+        usedMap[selectedName] = true; // mark locally
+        renderBoard();
+        // auto-close timer
+        let sec = REVEAL_SECONDS;
+        revealTimerText.textContent = 'Wird in ' + sec + ' Sekunden geschlossen.';
+        const iv = setInterval(()=>{
+          sec--; if(sec<=0){ clearInterval(iv); hideModal(revealModal); } else revealTimerText.textContent = 'Wird in ' + sec + ' Sekunden geschlossen.';
+        }, 1000);
+      }catch(e){
+        alert('Aufdecken fehlgeschlagen: ' + e.message);
+      }
+    });
+
+    revealClose.addEventListener('click', ()=> hideModal(revealModal));
+
+    function showModal(m){ m.classList.add('show'); }
+    function hideModal(m){ m.classList.remove('show'); }
+
+    // On load: attempt to fetch status if API base present
+    async function tryStatus(){
+      if(!API_BASE) return;
+      try{
+        const res = await fetch(API_BASE + '/status', { method:'GET' });
+        if(res.ok){
+          const j = await res.json();
+          if(j.setupId){
+            setupId = j.setupId;
+            initHint.textContent = 'Initialisiert (Setup-ID: ' + setupId + ')';
+            usedMap = j.used || {};
+            renderBoard();
+          }
+        }
+      }catch(e){}
+    }
+
+    // initial render
+    renderBoard();
+    tryStatus();
+  </script>
+</body>
+</html>
